@@ -7,6 +7,14 @@ const Next = require('next')
 const pino = require('pino')
 const proxyquire = require('proxyquire')
 const sinon = require('sinon')
+const { Agent, setGlobalDispatcher, request } = require('undici')
+
+const agent = new Agent({
+  keepAliveTimeout: 1,
+  keepAliveMaxTimeout: 1
+})
+
+setGlobalDispatcher(agent)
 
 test('should construct next with proper environment', t => {
   t.plan(2)
@@ -27,7 +35,7 @@ test('should construct next with proper environment', t => {
 })
 
 test('should return an html document', t => {
-  t.plan(3)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -38,18 +46,18 @@ test('should return an html document', t => {
       fastify.next('/hello')
     })
 
-  fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    request({ path: '/hello', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    })
   })
 })
 
 test('should support different methods', t => {
-  t.plan(3)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -60,18 +68,18 @@ test('should support different methods', t => {
       fastify.next('/hello', { method: 'options' })
     })
 
-  fastify.inject({
-    url: '/hello',
-    method: 'OPTIONS'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    request({ path: '/hello', origin, method: 'OPTIONS' }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    })
   })
 })
 
 test('should support a custom handler', t => {
-  t.plan(3)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -84,18 +92,19 @@ test('should support a custom handler', t => {
       })
     })
 
-  fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    request({ path: '/hello', origin }, (err, res) => {
+      t.error(err)
+
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+    })
   })
 })
 
 test('should return 404 on undefined route', t => {
-  t.plan(2)
+  t.plan(3)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -106,12 +115,12 @@ test('should return 404 on undefined route', t => {
       fastify.next('/hello')
     })
 
-  fastify.inject({
-    url: '/test',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 404)
+    request({ path: '/test', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 404)
+    })
   })
 })
 
@@ -192,6 +201,7 @@ test('should throw if callback is not a function', t => {
 })
 
 test('should serve /_next/* static assets', async t => {
+  t.plan(9)
   const manifest = require('./.next/build-manifest.json')
 
   const fastify = Fastify()
@@ -212,6 +222,7 @@ test('should serve /_next/* static assets', async t => {
 })
 
 test('should serve /base_path/_next/* static assets when basePath defined', async t => {
+  t.plan(9)
   const manifest = require('./.next/build-manifest.json')
 
   const fastify = Fastify()
@@ -255,11 +266,13 @@ test('should not serve static assets with provided option noServeAssets: true', 
 
   t.ok(commonAssets.length > 0)
 
-  await Promise.all(commonAssets.map(suffix => testNoServeNextAsset(t, fastify, `/_next/${suffix}`)))
+  const origin = await fastify.listen({ port: 0 })
+
+  await Promise.all(commonAssets.map(suffix => testNoServeNextAsset(t, origin, `/_next/${suffix}`)))
 })
 
 test('should return a json data on api route', t => {
-  t.plan(3)
+  t.plan(4)
 
   const fastify = Fastify()
   fastify
@@ -270,18 +283,18 @@ test('should return a json data on api route', t => {
 
   t.teardown(() => fastify.close())
 
-  fastify.inject({
-    url: '/api/user',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'application/json')
+    request({ path: '/api/user', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'application/json')
+    })
   })
 })
 
 test('should not log any errors', t => {
-  t.plan(5)
+  t.plan(6)
 
   let showedError = false
   const logger = pino({
@@ -298,25 +311,29 @@ test('should not log any errors', t => {
     logger
   })
 
+  t.teardown(() => fastify.close())
+
   fastify
     .register(require('./index')).after(() => {
       fastify.next('/hello')
     })
 
-  fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
-    t.match(res.payload, '<div>hello world</div>')
-    t.equal(showedError, false, 'Should not show any error')
+    request({ path: '/hello', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+      res.body.text().then(text => {
+        t.match(text, '<div>hello world</div>')
+      })
+      t.equal(showedError, false, 'Should not show any error')
+    })
   })
 })
 
 test('should respect plugin logLevel', t => {
-  t.plan(9)
+  t.plan(10)
 
   let didLog = false
   const logger = pino({
@@ -350,30 +367,34 @@ test('should respect plugin logLevel', t => {
 
   t.teardown(() => fastify.close())
 
-  fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
-    t.match(res.payload, '<div>hello world</div>')
-    t.equal(didLog, false)
-  })
 
-  fastify.inject({
-    url: '/api/user',
-    method: 'GET'
-  }, (err, res) => {
-    t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['content-type'], 'application/json')
-    t.equal(didLog, false)
+    // reset after the "listening" log message
+    didLog = false
+
+    request({ path: '/hello', origin }, (err, res) => {
+      t.error(err)
+
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+      res.body.text().then((payload) => {
+        t.match(payload, '<div>hello world</div>')
+      })
+      t.equal(didLog, false)
+    })
+
+    request({ path: '/api/user', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['content-type'], 'application/json')
+      t.equal(didLog, false)
+    })
   })
 })
 
 test('should preserve Fastify response headers set by plugins and hooks', t => {
-  t.plan(3)
+  t.plan(4)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -391,13 +412,14 @@ test('should preserve Fastify response headers set by plugins and hooks', t => {
       })
     })
 
-  fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
-    t.equal(res.headers['test-header'], 'hello')
+
+    request({ path: '/hello', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+      t.equal(res.headers['test-header'], 'hello')
+    })
   })
 })
 
@@ -474,7 +496,7 @@ test('should register under-pressure with provided options when it is an object'
 })
 
 test('should register under-pressure with underPressure: true - and expose route if configured', t => {
-  t.plan(2)
+  t.plan(3)
 
   const fastify = Fastify()
   t.teardown(() => fastify.close())
@@ -489,12 +511,13 @@ test('should register under-pressure with underPressure: true - and expose route
     }
   })
 
-  fastify.inject({
-    url: '/status',
-    method: 'GET'
-  }, (err, res) => {
+  fastify.listen({ port: 0 }, (err, origin) => {
     t.error(err)
-    t.equal(res.statusCode, 200)
+
+    request({ path: '/status', origin }, (err, res) => {
+      t.error(err)
+      t.equal(res.statusCode, 200)
+    })
   })
 })
 
@@ -515,10 +538,9 @@ test('should decorate with next render function', async t => {
     return reply.nextRender('/hello')
   })
 
-  const res = await fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  })
+  const origin = await fastify.listen({ port: 0 })
+
+  const res = await request({ path: '/hello', origin })
 
   t.equal(res.statusCode, 200)
   t.equal(res.headers['test-header'], 'hello')
@@ -541,10 +563,9 @@ test('should decorate with next render error function', async t => {
     return reply.nextRenderError(new Error('Test error message'))
   })
 
-  const res = await fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  })
+  const origin = await fastify.listen({ port: 0 })
+
+  const res = await request({ path: '/hello', origin })
 
   t.equal(res.statusCode, 200)
   t.equal(res.headers['test-header'], 'hello')
@@ -572,15 +593,14 @@ test('should let next render any page in fastify error handler', async t => {
     return reply.nextRender('/hello')
   })
 
-  const res = await fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  })
+  const origin = await fastify.listen({ port: 0 })
+
+  const res = await request({ path: '/hello', origin })
 
   t.equal(res.statusCode, 500)
   t.equal(res.headers['test-header'], 'hello')
   t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
-  t.match(res.payload, '<div>hello world</div>')
+  t.match(await res.body.text(), '<div>hello world</div>')
 })
 
 test('should let next render error page in fastify error handler', async t => {
@@ -605,15 +625,14 @@ test('should let next render error page in fastify error handler', async t => {
     return reply.nextRenderError(err)
   })
 
-  const res = await fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  })
+  const origin = await fastify.listen({ port: 0 })
+
+  const res = await request({ path: '/hello', origin })
 
   t.equal(res.statusCode, 500)
   t.equal(res.headers['test-header'], 'hello')
   t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
-  t.match(res.payload, '<div>error</div>')
+  t.match(await res.body.text(), '<div>error</div>')
 })
 
 async function testNextAsset (t, fastify, url) {
@@ -622,8 +641,8 @@ async function testNextAsset (t, fastify, url) {
   t.equal(res.headers['content-type'], 'application/javascript; charset=UTF-8')
 }
 
-async function testNoServeNextAsset (t, fastify, url) {
-  const res = await fastify.inject(url)
+async function testNoServeNextAsset (t, origin, path) {
+  const res = await request({ path, origin })
   t.equal(res.statusCode, 404)
   t.equal(res.headers['content-type'], 'application/json; charset=utf-8')
 }
@@ -653,22 +672,18 @@ test('should preserve custom properties on the request when using onRequest hook
     done()
   })
 
-  let res = await fastify.inject({
-    url: '/hello',
-    method: 'GET'
-  })
+  const origin = await fastify.listen({ port: 0 })
+
+  let res = await request({ path: '/hello', origin })
 
   t.equal(res.statusCode, 200)
   t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
-  t.match(res.payload, '<div>hello world</div>')
+  t.match(await res.body.text(), '<div>hello world</div>')
 
-  res = await fastify.inject({
-    url: '/custom_prop_page',
-    method: 'GET'
-  })
+  res = await request({ path: '/custom_prop_page', origin })
 
   t.equal(res.statusCode, 200)
   t.equal(res.headers['content-type'], 'text/html; charset=utf-8')
   // for some reason React (or Next.js) adds <!-- --> in front of the property that is being evaluated on the page
-  t.match(res.payload, '<div>another hello world page, customProperty value: <!-- -->test</div>')
+  t.match(await res.body.text(), '<div>another hello world page, customProperty value: <!-- -->test</div>')
 })
