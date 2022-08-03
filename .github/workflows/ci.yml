@@ -12,6 +12,7 @@ on:
 
 jobs:
   test:
-    uses: fastify/workflows/.github/workflows/plugins-ci.yml@v3
+    uses: Uzlopak/workflows/.github/workflows/plugins-ci.yml@license-check-additional
     with:
       license-check: true
+      license-check-allowed-additional: CC-BY-4.0
