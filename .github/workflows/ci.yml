@@ -15,4 +15,4 @@ jobs:
     uses: Uzlopak/workflows/.github/workflows/plugins-ci.yml@license-check-additional
     with:
       license-check: true
-      license-check-allowed-additional: CC-BY-4.0
+      license-check-allowed-additional: CC-BY-4.0;CC0-1.0
